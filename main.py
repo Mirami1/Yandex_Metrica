@@ -9,7 +9,11 @@ import time
 import io
 import os
 import logging
+import re
 from PIL import Image
+import shutil
+
+work_dir = 'Results'
 
 
 # Основной метод - настраивает браузер, логинится и узнает о сайтах во вкладке SEO
@@ -17,7 +21,8 @@ def parse_metrica():
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")  # не отображает браузер вообще
     driver = webdriver.Chrome(ChromeDriverManager().install(), options=options)
-
+    # чтобы каждая строка с конверсией была нормального размера, иначе скринит обрезанно в ширину
+    driver.set_window_size(1920, 1080)
     login(driver)
 
     # находим список сайтов во вкладке SEO
@@ -26,15 +31,22 @@ def parse_metrica():
 
     sites = driver.find_elements_by_class_name('counters-list-table-item')
 
+    sites_name = [i.find_element_by_class_name('link').text for i in sites]
+
+    print('Выбери из списка SEO нужные сайты под цифрой через пробел:')
+    for i in range(0, len(sites_name)):
+        print(str((i + 1)) + '. ' + sites_name[i])
+
+    numbers = list(map(int, input('\nВаш выбор : ').strip().split()))
     # и по каждому сайту выполняем процедуру сбора информации с дашборда и конверсий, возвращаемся на начальную страницу
     # со списком сайтов и заново создаем список, потому что после возвращения к начальной странице мы не сможем
     # обратиться к конкретному сайту из необновленного списка - каждый элемент страницы имеет обновляемый уникальный
     # айдишник поэтому нам досточно знать количество отслеживаемых сайтов и обращаться по-индексово к sites[]
-    for i in range(0, len(sites)):
+    for i in range(0, len(numbers)):
         # нахождение и клик по нужному сайту
-        site = sites[i]
+        site = sites[numbers[i] - 1]
         page = site.find_element_by_class_name('counters-list-table-item__counter-info')
-        page_name = page.find_element_by_class_name('link').text.replace(' ', '').replace('.', '')
+        page_name = page.find_element_by_class_name('link').text.replace('\n', '').replace('.', '')
 
         # заставляем спуститься к элементу, иначе словим исключение
         driver.execute_script("arguments[0].scrollIntoView(false);", page)
@@ -73,14 +85,37 @@ def login(driver):
 def parser_of_dashboard(driver, watching='demo'):
     time.sleep(6)
 
+    site_name = watching
+    path_list = ['Графики', 'Цифры', 'Диаграммы', 'Просмотры', 'Конверсии']
+    watching = work_dir + '//' + watching
     # создаем папку для сайта
     if not os.path.exists(watching):
-        os.makedirs(watching)
-    f = open(f"{watching}//{watching}.txt", "w", encoding='utf-8')
+        for path in path_list:
+            os.makedirs(watching + '//' + path)
+
+    f = open(f"{watching}//{site_name}.txt", "w", encoding='utf-8')
+
+    print('\nСайт ' + site_name)
+
+    print("Введи промежуток отслеживания в формате 15.01.2020  01.02.2020 или нажми пробел, "
+          "чтобы промежуток отслеживания был месяцем")
+
+    gap = input()
+    if gap.strip() == '':
+        mouth = driver.find_element_by_xpath("//*[contains(text(),'Месяц')]/..")
+        mouth.click()
+    else:
+        begin, end = gap.strip().split()
+        driver.find_element_by_class_name('date-range-selector__selector-button').click()
+        driver.find_element_by_class_name('super-calendar__from').click()
+        driver.find_element_by_class_name('super-calendar__from').clear()
+        driver.find_element_by_class_name('super-calendar__from').send_keys(begin)
+        driver.find_element_by_class_name('super-calendar__to').click()
+        driver.find_element_by_class_name('super-calendar__to').clear()
+        driver.find_element_by_class_name('super-calendar__to').send_keys(end)
+        driver.find_element_by_class_name('super-calendar__show').click()
 
     # указываем что нужны данные в дашборде за месяц
-    mouth = driver.find_element_by_xpath("//*[contains(text(),'Месяц')]/..")
-    mouth.click()
 
     time.sleep(3)
 
@@ -97,7 +132,7 @@ def parser_of_dashboard(driver, watching='demo'):
         text = zagolovok + ' ' + numbers + '\n'
         f.write(text)
         time.sleep(1)
-        capture_element(elem, zagolovok, watching)
+        capture_element(elem, zagolovok, watching, 'Графики')
         f.write('\n')
 
     # также с численными виджетами
@@ -108,7 +143,7 @@ def parser_of_dashboard(driver, watching='demo'):
         text = zagolovok + ' ' + numbers + '\n'
         f.write(text)
         time.sleep(1)
-        capture_element(elem, zagolovok, watching)
+        capture_element(elem, zagolovok, watching, 'Цифры')
         f.write('\n')
 
     # проходится по кругововым диаграммам - делаеи скриншот, захолит на страницу диаграммы
@@ -120,7 +155,7 @@ def parser_of_dashboard(driver, watching='demo'):
 
         zagolovok = elem.find_element_by_class_name('smart-link')
         f.write(zagolovok.text + '\n')
-        capture_element(elem, zagolovok.text, watching)
+        capture_element(elem, zagolovok.text, watching, 'Диаграммы')
 
         # идем на страницу круговой диаграммы
         zagolovok.click()
@@ -176,7 +211,7 @@ def parser_of_dashboard(driver, watching='demo'):
             zagolovok = elem.find_element_by_class_name('widget-title__inner').text
             data = elem.find_element_by_class_name('widget__stats').text
             time.sleep(1)
-            capture_element(elem, zagolovok, watching)
+            capture_element(elem, zagolovok, watching, "Просмотры")
             container = data
             f.write(container)
             f.write('\n\n')
@@ -217,8 +252,9 @@ def parser_of_dashboard(driver, watching='demo'):
 
 def conversion_finder(driver, watching: str):
     # ищем кнопку с Отчетами и кликаем
+
     menu_button = WebDriverWait(driver, 20).until(
-        EC.presence_of_element_located((By.CLASS_NAME, "main-menu__item_type_reports")))
+        EC.element_to_be_clickable((By.CLASS_NAME, "main-menu__item_type_reports")))
     menu_button.click()
     # заставляем мышь провести над кнопкой со стандартными отчетами
     conversion_button = driver.find_element_by_class_name('main-menu-finder__item_id_standart-reports')
@@ -229,24 +265,34 @@ def conversion_finder(driver, watching: str):
     # собираем все цели, спускаемся по каждой цели и делаем скриншот
     time.sleep(5)
     reports = driver.find_elements_by_class_name('conversion-report__goal')
+
+    count = 1
     for report in reports:
         driver.execute_script("arguments[0].scrollIntoView(false);", report)
+        time.sleep(1)
         name = report.find_element_by_class_name('conversion-report__goal-title-text').text
-        capture_element(report, name, watching)
+        capture_element(report, str(count) + ' ' + name, watching, 'Конверсии')
+        count += 1
 
 
 # сохранение скриншота элемента сайта
-def capture_element(element, uniq, directory):
+def capture_element(element, uniq, directory, category):
     image = element.screenshot_as_png
     imagestream = io.BytesIO(image)
     im = Image.open(imagestream)
     # убираем все мешающие для сохранения файла символы
-    im.save(directory + '//' + uniq.replace(' ', '_').replace(':', '').replace('"', '')
-            .replace('//', '').replace('\n', '') + '.png')
+    uniq = re.sub('[:"/]', '', uniq)
+    im.save(directory + '//' + category + '//' + uniq.replace('\n', ' ') + '.png')
 
 
 if __name__ == '__main__':
+    if not os.path.exists(work_dir):
+        os.makedirs(work_dir)
     logging.basicConfig(filename='app.log', filemode='w', format='%(name)s - %(levelname)s - %(message)s')
     logging.info('This will get logged')
     parse_metrica()
-# login()
+
+    dir_list = os.listdir(work_dir)
+    print(dir_list)
+    for papka in dir_list:
+        shutil.make_archive(papka, 'zip', work_dir + '//' + papka)
